@@ -481,14 +481,9 @@ header h1 {
 }
 
 .flip-hint {
-    position: absolute;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 0.9em;
-    opacity: 0.7;
-    font-style: italic;
+    display: none; 
 }
+
 
 .completion-message {
     text-align: center;
@@ -519,7 +514,7 @@ header h1 {
     margin: 20px auto 30px auto;
     width: 100%;
     max-width: 600px;
-    height: 400px;
+    height: 460px; /* Keep fixed height */
     cursor: pointer;
 }
 
@@ -544,44 +539,106 @@ header h1 {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 40px;
+    justify-content: flex-start; /* Changed from center */
+    padding: 30px;
     border-radius: 20px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
+    overflow-y: auto; /* Make it scrollable */
+    overflow-x: hidden;
 }
+
 
 .flashcard-back {
     transform: rotateY(180deg);
-    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
 }
 
+
+
+
+/* Custom scrollbar for the cards */
+.flashcard-front::-webkit-scrollbar,
+.flashcard-back::-webkit-scrollbar {
+    width: 8px;
+}
+
+.flashcard-front::-webkit-scrollbar-track,
+.flashcard-back::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+}
+
+.flashcard-front::-webkit-scrollbar-thumb,
+.flashcard-back::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 10px;
+}
+
+.flashcard-front::-webkit-scrollbar-thumb:hover,
+.flashcard-back::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+/* Wrapper to center content when it doesn't fill the card */
+.flashcard-front::before,
+.flashcard-back::before {
+    content: '';
+    flex-grow: 1;
+    min-height: 0;
+}
+
+.flashcard-front::after,
+.flashcard-back::after {
+    content: '';
+    flex-grow: 1;
+    min-height: 60px; /* Space for flip hint */
+}
+
+
+
+
+
 .card-text {
-    font-size: 2em;
+    font-size: 1.8em;
     font-weight: 600;
     text-align: center;
     word-wrap: break-word;
     max-width: 100%;
+    white-space: pre-wrap;
+    margin-bottom: 20px;
+    line-height: 1.4;
+    flex-shrink: 0; /* Don't compress text */
 }
 
-#frontMedia {
-    margin-top: 20px;
-}
 
-#frontMedia img {
-    max-width: 100%;
-    max-height: 200px;
-    border-radius: 12px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-}
-
-#frontAudio audio,
-#backAudio audio {
+#frontMedia,
+#backMedia {
+    flex-shrink: 0; /* Don't compress media */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px;
     width: 100%;
-    max-width: 350px;
-    margin-top: 15px;
 }
+
+#frontMedia img,
+#backMedia img {
+    max-width: 90%;
+    max-height: 180px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    display: block;
+    margin: 0 auto;
+}
+
+#frontMedia audio,
+#backMedia audio {
+    max-width: 90%;
+    display: block;
+    margin: 0 auto;
+}
+
 .study-actions {
     display: flex;
     gap: 15px;
@@ -604,6 +661,7 @@ header h1 {
     flex-wrap: wrap;
 }
 
+
 /* Modal */
 .modal {
     display: none;
@@ -617,11 +675,6 @@ header h1 {
     animation: fadeIn 0.3s;
 }
 
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
-
 .modal-content {
     background-color: white;
     margin: 5% auto;
@@ -629,20 +682,12 @@ header h1 {
     border-radius: 15px;
     width: 90%;
     max-width: 500px;
+    max-height: 90vh; /* NEW: Limits the height to 90% of the viewport */
+    overflow-y: auto;  /* NEW: Adds a vertical scrollbar when content overflows */
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
     animation: slideDown 0.3s;
 }
 
-@keyframes slideDown {
-    from {
-        transform: translateY(-50px);
-        opacity: 0;
-    }
-    to {
-        transform: translateY(0);
-        opacity: 1;
-    }
-}
 
 .close {
     color: #aaa;
@@ -677,6 +722,37 @@ header h1 {
     outline: none;
     border-color: #667eea;
 }
+
+/* ... (All your existing CSS rules remain unchanged) ... */
+/* Add this new rule to your styles.css file */
+.modal-content form textarea {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 15px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 1.1em; /* Increased font size for better readability */
+    font-family: inherit; /* Use the same font as the rest of the page */
+    resize: vertical; /* Allow vertical resizing only */
+    box-sizing: border-box; /* Ensures padding doesn't affect the final width */
+    transition: border-color 0.3s;
+}
+
+.modal-content form textarea:focus {
+    outline: none;
+    border-color: #667eea;
+}
+/* Ensure card text preserves line breaks */
+.card-text {
+    font-size: 1.8em;
+    font-weight: 600;
+    text-align: center;
+    word-wrap: break-word;
+    max-width: 100%;
+    white-space: pre-wrap; /* This is the key property to preserve line breaks */
+}
+
+
 
 .modal-content form label {
     display: block;
@@ -819,7 +895,13 @@ header h1 {
         font-size: 0.9em;
         gap: 15px;
     }
+ 
+    .study-controls .btn {
+        padding: 8px 16px; /* Makes the buttons smaller */
+        font-size: 0.9em;
+    }
 }
+
 
 /* Print Styles */
 @media print {
@@ -835,3 +917,5 @@ header h1 {
         display: none;
     }
 }
+
+
