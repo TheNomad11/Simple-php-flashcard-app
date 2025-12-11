@@ -62,8 +62,9 @@ define('PROGRESS_DIR', DATA_DIR . '/progress');
 define('LOG_FILE', DATA_DIR . '/security.log');
 
 // Security: Allowed file extensions
-define('ALLOWED_IMAGE_TYPES', ['jpg', 'jpeg', 'png', 'gif', 'webp']);
-define('ALLOWED_AUDIO_TYPES', ['mp3', 'wav', 'ogg', 'm4a', 'webm']);
+define('ALLOWED_IMAGE_TYPES', 'jpg,jpeg,png,gif,webp');
+define('ALLOWED_AUDIO_TYPES', 'mp3,wav,ogg,m4a,webm');
+
 define('MAX_FILE_SIZE', 5242880); // 5MB
 
 // Registration Settings
@@ -787,23 +788,22 @@ function deleteCard($deckId, $cardId) {
  */
 
 // Media Functions with Access Control
-function uploadMedia($file, $type = 'image') {
+function uploadMedia($file, $type = 'image', $deckId = null) {
     if (!isset($file['tmp_name']) || !is_uploaded_file($file['tmp_name'])) {
         return '';
     }
     
     // Check file size
     if ($file['size'] > MAX_FILE_SIZE) {
-        logSecurityEvent('media_upload_size_exceeded', ['size' => $file['size']]);
+        logSecurityEvent('media:upload_size_exceeded', ['size' => $file['size']]);
         return '';
     }
     
     // Validate extension
     $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-    $allowedTypes = $type === 'image' ? ALLOWED_IMAGE_TYPES : ALLOWED_AUDIO_TYPES;
-    
+    $allowedTypes = ($type === 'image') ? explode(',', ALLOWED_IMAGE_TYPES) : explode(',', ALLOWED_AUDIO_TYPES);
     if (!in_array($ext, $allowedTypes)) {
-        logSecurityEvent('media_upload_invalid_extension', ['ext' => $ext]);
+        logSecurityEvent('media:upload_invalid_extension', ['ext' => $ext]);
         return '';
     }
     
@@ -812,102 +812,142 @@ function uploadMedia($file, $type = 'image') {
     $mimeType = finfo_file($finfo, $file['tmp_name']);
     finfo_close($finfo);
     
-    $allowedMimes = [
-        'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-        'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4',
-        'audio/webm', 'video/webm' // WebM can be detected as video/webm even for audio-only
-    ];
+    $allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 
+                     'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 
+                     'audio/webm', 'video/webm']; // WebM can be detected as video/webm even for audio-only
     
     if (!in_array($mimeType, $allowedMimes)) {
-        logSecurityEvent('media_upload_invalid_mime', ['mime' => $mimeType]);
+        logSecurityEvent('media:upload_invalid_mime', ['mime' => $mimeType]);
         return '';
     }
     
-    // Generate secure filename
-    $filename = bin2hex(random_bytes(16)) . '.' . $ext;
+    // Generate secure filename WITH deck ID for fast access control
+    if ($deckId && validateDeckId($deckId)) {
+        $filename = bin2hex(random_bytes(16)) . '_' . $deckId . '.' . $ext;
+    } else {
+        // Fallback for old code or missing deckId
+        $filename = bin2hex(random_bytes(16)) . '.' . $ext;
+    }
     $path = MEDIA_DIR . '/' . $filename;
     
     if (move_uploaded_file($file['tmp_name'], $path)) {
-        @chmod($path, 0644);
-        logSecurityEvent('media_uploaded', ['filename' => $filename, 'type' => $type]);
+        chmod($path, 0644);
+        logSecurityEvent('media:uploaded', ['filename' => $filename, 'type' => $type, 'deckid' => $deckId]);
         return $filename;
     }
     
-    logSecurityEvent('media_upload_failed', ['filename' => $filename]);
+    logSecurityEvent('media:upload_failed', ['filename' => $filename]);
     return '';
 }
 
 function deleteMedia($filename, $deckId = null) {
     if (empty($filename)) return;
     
-    // Security: Validate filename
+    // Security: Validate filename (supports both old and new format with deck ID)
     $filename = basename($filename);
-    if (!preg_match('/^[a-f0-9]{32}\.(jpg|jpeg|png|gif|webp|mp3|wav|ogg|m4a|webm)$/i', $filename)) {
+    if (!preg_match('/^[a-f0-9]{32}(_[a-zA-Z0-9_-]+)?\.(jpg|jpeg|png|gif|webp|mp3|wav|ogg|m4a|webm)$/i', $filename)) {
         return;
     }
     
     // Verify ownership if deckId provided
     if ($deckId && !checkDeckAccess($deckId, true)) {
-        logSecurityEvent('media_delete_access_denied', ['filename' => $filename, 'deck_id' => $deckId]);
+        logSecurityEvent('media:delete_access_denied', ['filename' => $filename, 'deckid' => $deckId]);
         return;
     }
     
     $path = MEDIA_DIR . '/' . $filename;
     if (file_exists($path)) {
-        if (!@unlink($path)) {
-            logSecurityEvent('media_delete_failed', ['filename' => $filename]);
+        if (!unlink($path)) {
+            logSecurityEvent('media:delete_failed', ['filename' => $filename]);
         }
     }
 }
+
 
 function serveMedia($filename) {
     requireLogin();
     
     $filename = basename($filename);
-    if (!preg_match('/^[a-f0-9]{32}\.(jpg|jpeg|png|gif|webp|mp3|wav|ogg|m4a|webm)$/i', $filename)) {
-        logSecurityEvent('media_access_invalid_filename', ['filename' => $filename]);
-        http_response_code(404);
-        exit;
-    }
     
-    $path = MEDIA_DIR . '/' . $filename;
-    if (!file_exists($path)) {
-        http_response_code(404);
+    // Try to extract deck ID from filename (new format: hash_deckid.ext)
+    if (preg_match('/^[a-f0-9]{32}_([a-zA-Z0-9_-]+)\.(jpg|jpeg|png|gif|webp|mp3|wav|ogg|m4a|webm)$/i', $filename, $matches)) {
+        // NEW FORMAT: Fast access check using embedded deck ID
+        $deckId = $matches[1];
+        
+        if (!validateDeckId($deckId) || !checkDeckAccess($deckId, false)) {
+            logSecurityEvent('media:access_denied', ['filename' => $filename, 'deckid' => $deckId]);
+            http_response_code(403);
+            exit;
+        }
+        
+        $path = MEDIA_DIR . '/' . $filename;
+        if (!file_exists($path)) {
+            http_response_code(404);
+            exit;
+        }
+        
+        // Serve file
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        $mimeTypes = [
+            'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+            'gif' => 'image/gif', 'webp' => 'image/webp', 'mp3' => 'audio/mpeg',
+            'wav' => 'audio/wav', 'ogg' => 'audio/ogg', 'm4a' => 'audio/mp4',
+            'webm' => 'audio/webm'
+        ];
+        
+        header('Content-Type: ' . ($mimeTypes[$ext] ?? 'application/octet-stream'));
+        header('Content-Length: ' . filesize($path));
+        header('Cache-Control: private, max-age=3600');
+        readfile($path);
         exit;
-    }
-    
-    // Enhanced: Verify user has access to this media file
-    $hasAccess = false;
-    $decks = getDecks();
-    foreach ($decks as $deck) {
-        $cards = getCards($deck['id']);
-        foreach ($cards as $card) {
-            if ($card['image'] === $filename || $card['audio'] === $filename) {
-                $hasAccess = true;
-                break 2;
+        
+    } elseif (preg_match('/^[a-f0-9]{32}\.(jpg|jpeg|png|gif|webp|mp3|wav|ogg|m4a|webm)$/i', $filename)) {
+        // OLD FORMAT: Fallback to slow check for backward compatibility
+        $path = MEDIA_DIR . '/' . $filename;
+        if (!file_exists($path)) {
+            http_response_code(404);
+            exit;
+        }
+        
+        // Verify user has access to this media file (old slow method)
+        $hasAccess = false;
+        $decks = getDecks();
+        foreach ($decks as $deck) {
+            $cards = getCards($deck['id']);
+            foreach ($cards as $card) {
+                if ($card['image'] === $filename || $card['audio'] === $filename) {
+                    $hasAccess = true;
+                    break 2;
+                }
             }
         }
-    }
-    
-    if (!$hasAccess) {
-        logSecurityEvent('media_access_denied', ['filename' => $filename]);
-        http_response_code(403);
+        
+        if (!$hasAccess) {
+            logSecurityEvent('media:access_denied', ['filename' => $filename]);
+            http_response_code(403);
+            exit;
+        }
+        
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        $mimeTypes = [
+            'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+            'gif' => 'image/gif', 'webp' => 'image/webp', 'mp3' => 'audio/mpeg',
+            'wav' => 'audio/wav', 'ogg' => 'audio/ogg', 'm4a' => 'audio/mp4',
+            'webm' => 'audio/webm'
+        ];
+        
+        header('Content-Type: ' . ($mimeTypes[$ext] ?? 'application/octet-stream'));
+        header('Content-Length: ' . filesize($path));
+        header('Cache-Control: private, max-age=3600');
+        readfile($path);
+        exit;
+        
+    } else {
+        // Invalid filename format
+        logSecurityEvent('media:access_invalid_filename', ['filename' => $filename]);
+        http_response_code(404);
         exit;
     }
-    
-    $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-    $mimeTypes = [
-        'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
-        'gif' => 'image/gif', 'webp' => 'image/webp',
-        'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'ogg' => 'audio/ogg', 
-        'm4a' => 'audio/mp4', 'webm' => 'audio/webm'
-    ];
-    
-    header('Content-Type: ' . ($mimeTypes[$ext] ?? 'application/octet-stream'));
-    header('Content-Length: ' . filesize($path));
-    header('Cache-Control: private, max-age=3600');
-    readfile($path);
-    exit;
 }
 
 // Handle media serving
@@ -983,35 +1023,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $error = 'Failed to delete deck. Check permissions.';
             }
-        } elseif ($action === 'add_card') {
-            $deckId = $_POST['deck_id'] ?? '';
-            if (!checkRateLimit('add_card_' . $deckId, 30, 60)) {
-                $error = 'Too many card additions. Please slow down.';
-            } else {
-                $image = !empty($_FILES['image']['tmp_name']) ? uploadMedia($_FILES['image'], 'image') : '';
-  
-  
-  
-  // With this more robust check:
-$audio = '';
-if (!empty($_FILES['audio']['tmp_name']) || !empty($_POST['audio'])) {
-    // Handle both traditional file upload and fetch API submission
-    if (!empty($_FILES['audio']['tmp_name'])) {
-        $audio = uploadMedia($_FILES['audio'], 'audio');
+  } elseif ($action === 'add_card') {
+    $deckId = $_POST['deck_id'] ?? '';
+    if (!checkRateLimit('add_card_' . $deckId, 30, 60)) {
+        $error = 'Too many card additions. Please slow down.';
     } else {
-        // Handle audio data from fetch API
-        $audioData = file_get_contents('php://input');
-        if ($audioData) {
-            $tempFile = tempnam(sys_get_temp_dir(), 'audio');
-            file_put_contents($tempFile, $audioData);
-            $audio = uploadMedia(['tmp_name' => $tempFile, 'name' => 'recording.webm'], 'audio');
-            unlink($tempFile);
+        $image = !empty($_FILES['image']['tmp_name']) ? uploadMedia($_FILES['image'], 'image', $deckId) : '';
+        
+        // With this more robust check:
+        $audio = '';
+        if (!empty($_FILES['audio']['tmp_name']) || !empty($_POST['audio'])) {
+            // Handle both traditional file upload and fetch API submission
+            if (!empty($_FILES['audio']['tmp_name'])) {
+                $audio = uploadMedia($_FILES['audio'], 'audio', $deckId);
+            } else {
+                // Handle audio data from fetch API
+                $audioData = file_get_contents('php://input');
+                if ($audioData) {
+                    $tempFile = tempnam(sys_get_temp_dir(), 'audio');
+                    file_put_contents($tempFile, $audioData);
+                    $audio = uploadMedia(['tmp_name' => $tempFile, 'name' => 'recording.webm'], 'audio', $deckId);
+                    unlink($tempFile);
+                }
+            }
         }
-    }
-}
- 
- 
- 
+
  
  
  
@@ -1045,19 +1081,19 @@ if (!empty($_FILES['audio']['tmp_name']) || !empty($_POST['audio'])) {
                 if (isset($_POST['delete_image']) && $_POST['delete_image'] === '1') {
                     deleteMedia($image, $deckId);
                     $image = '';
-                } elseif (!empty($_FILES['image']['tmp_name'])) {
-                    $newImage = uploadMedia($_FILES['image'], 'image');
-                    if ($newImage) {
-                        deleteMedia($image, $deckId);
-                        $image = $newImage;
-                    }
-                }
-                
-                if (isset($_POST['delete_audio']) && $_POST['delete_audio'] === '1') {
-                    deleteMedia($audio, $deckId);
-                    $audio = '';
-                } elseif (!empty($_FILES['audio']['tmp_name'])) {
-                    $newAudio = uploadMedia($_FILES['audio'], 'audio');
+         } elseif (!empty($_FILES['image']['tmp_name'])) {
+    $newImage = uploadMedia($_FILES['image'], 'image', $deckId);
+    if ($newImage) {
+        deleteMedia($image, $deckId);
+        $image = $newImage;
+    }
+}
+
+if (isset($_POST['deleteaudio']) && $_POST['deleteaudio'] == '1') {
+    deleteMedia($audio, $deckId);
+    $audio = '';
+} elseif (!empty($_FILES['audio']['tmp_name'])) {
+    $newAudio = uploadMedia($_FILES['audio'], 'audio', $deckId);
                     if ($newAudio) {
                         deleteMedia($audio, $deckId);
                         $audio = $newAudio;
